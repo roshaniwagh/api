@@ -1,84 +1,28 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, Date
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
-from jose import JWTError, jwt
 from passlib.context import CryptContext
-from datetime import datetime, timedelta
-from typing import Optional, List
+from jose import JWTError, jwt
+from datetime import datetime, timedelta, date
 
-# ==============================
+# ===================================================
 # CONFIG
-# ==============================
+# ===================================================
 
-SECRET_KEY = "supersecretkey123"
+SECRET_KEY = "supersecretkey"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+DATABASE_URL = "sqlite:///./app.db"
 
-DATABASE_URL = "sqlite:///./company.db"
-
-# ==============================
+# ===================================================
 # DATABASE SETUP
-# ==============================
+# ===================================================
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
-
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
-
-# ==============================
-# MODELS
-# ==============================
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True)
-    hashed_password = Column(String)
-
-
-class Department(Base):
-    __tablename__ = "departments"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True)
-    employees = relationship("Employee", back_populates="department")
-
-
-class Employee(Base):
-    __tablename__ = "employees"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    department_id = Column(Integer, ForeignKey("departments.id"))
-
-    department = relationship("Department", back_populates="employees")
-    salaries = relationship("Salary", back_populates="employee")
-
-
-class Salary(Base):
-    __tablename__ = "salaries"
-    id = Column(Integer, primary_key=True, index=True)
-    employee_id = Column(Integer, ForeignKey("employees.id"))
-    amount = Column(Integer)
-    month = Column(String)
-
-    employee = relationship("Employee", back_populates="salaries")
-
-
-Base.metadata.create_all(bind=engine)
-
-# ==============================
-# FASTAPI APP
-# ==============================
-
-app = FastAPI()
-
-# ==============================
-# DEPENDENCIES
-# ==============================
 
 def get_db():
     db = SessionLocal()
@@ -87,176 +31,262 @@ def get_db():
     finally:
         db.close()
 
+# ===================================================
+# MODELS
+# ===================================================
+
+class Department(Base):
+    __tablename__ = "departments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    location = Column(String)
+
+    users = relationship("User", back_populates="department")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    department_id = Column(Integer, ForeignKey("departments.id"))
+
+    department = relationship("Department", back_populates="users")
+    salaries = relationship("Salary", back_populates="user")
+
+
+class Salary(Base):
+    __tablename__ = "salaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    amount = Column(Integer)
+    effective_date = Column(Date, default=date.today)
+
+    user = relationship("User", back_populates="salaries")
+
+Base.metadata.create_all(bind=engine)
+
+# ===================================================
+# AUTH SETUP
+# ===================================================
+
 pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
-# ==============================
-# AUTH UTILS
-# ==============================
 
 def hash_password(password: str):
     return pwd_context.hash(password)
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+def verify_password(plain, hashed):
+    return pwd_context.verify(plain, hashed)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+def get_current_user(token: str = Depends(oauth2_scheme),
+                     db: Session = Depends(get_db)):
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
+        username: str = payload.get("sub")
         if username is None:
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user = db.query(User).filter(User.username == username).first()
-    if not user:
+    if user is None:
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
 
-# ==============================
+# ===================================================
 # SCHEMAS
-# ==============================
+# ===================================================
+
+class DepartmentCreate(BaseModel):
+    name: str
+    location: str
+
+class DepartmentResponse(BaseModel):
+    id: int
+    name: str
+    location: str
+    class Config:
+        orm_mode = True
 
 class UserCreate(BaseModel):
     username: str
     password: str
-
-class DepartmentCreate(BaseModel):
-    name: str
-
-class EmployeeCreate(BaseModel):
-    name: str
     department_id: int
 
-class SalaryCreate(BaseModel):
-    employee_id: int
-    amount: int
-    month: str
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    department_id: int
+    class Config:
+        orm_mode = True
 
-# ==============================
-# AUTH ENDPOINTS
-# ==============================
+class SalaryCreate(BaseModel):
+    user_id: int
+    amount: int
+
+# ===================================================
+# APP
+# ===================================================
+
+app = FastAPI()
+
+# ===================================================
+# REGISTER
+# ===================================================
 
 @app.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.username == user.username).first()
-    if existing:
+
+    dept = db.query(Department).filter(
+        Department.id == user.department_id
+    ).first()
+
+    if not dept:
+        raise HTTPException(status_code=400, detail="Department not found")
+
+    existing_user = db.query(User).filter(
+        User.username == user.username
+    ).first()
+
+    if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
 
-    hashed_pw = hash_password(user.password)
-    db_user = User(username=user.username, hashed_password=hashed_pw)
+    new_user = User(
+        username=user.username,
+        hashed_password=hash_password(user.password),
+        department_id=user.department_id
+    )
 
-    db.add(db_user)
+    db.add(new_user)
     db.commit()
-    db.refresh(db_user)
+    db.refresh(new_user)
 
     return {"message": "User registered successfully"}
 
+# ===================================================
+# LOGIN
+# ===================================================
 
 @app.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == form_data.username).first()
+def login(form_data: OAuth2PasswordRequestForm = Depends(),
+          db: Session = Depends(get_db)):
 
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    user = db.query(User).filter(
+        User.username == form_data.username
+    ).first()
+
+    if not user or not verify_password(
+        form_data.password, user.hashed_password
+    ):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    access_token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
+    access_token = create_access_token(data={"sub": user.username})
 
     return {"access_token": access_token, "token_type": "bearer"}
 
-# ==============================
-# PROTECTED APIs
-# ==============================
+# ===================================================
+# DEPARTMENTS
+# ===================================================
 
-@app.post("/departments")
-def create_department(
-    data: DepartmentCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    dept = Department(name=data.name)
-    db.add(dept)
-    db.commit()
-    db.refresh(dept)
-    return dept
+@app.post("/departments", response_model=DepartmentResponse)
+def create_department(dept: DepartmentCreate,
+                      current_user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
 
-
-@app.post("/employees")
-def create_employee(
-    data: EmployeeCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    department = db.query(Department).filter(
-        Department.id == data.department_id
-    ).first()
-
-    if not department:
-        raise HTTPException(status_code=404, detail="Department not found")
-
-    emp = Employee(name=data.name, department_id=data.department_id)
-
-    db.add(emp)
-    db.commit()
-    db.refresh(emp)
-    return emp
-
-
-@app.post("/salaries")
-def add_salary(
-    data: SalaryCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    employee = db.query(Employee).filter(
-        Employee.id == data.employee_id
-    ).first()
-
-    if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
-
-    salary = Salary(
-        employee_id=data.employee_id,
-        amount=data.amount,
-        month=data.month
+    new_dept = Department(
+        name=dept.name,
+        location=dept.location
     )
 
-    db.add(salary)
+    db.add(new_dept)
     db.commit()
-    db.refresh(salary)
-    return salary
+    db.refresh(new_dept)
+
+    return new_dept
 
 
-@app.get("/employees")
-def get_employees(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    return db.query(Employee).all()
+@app.get("/departments", response_model=list[DepartmentResponse])
+def get_departments(current_user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
 
+    return db.query(Department).all()
 
-@app.get("/employees/{employee_id}/salaries")
-def get_employee_salaries(
-    employee_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    employee = db.query(Employee).filter(
-        Employee.id == employee_id
+# ===================================================
+# USERS
+# ===================================================
+
+@app.get("/users", response_model=list[UserResponse])
+def get_users(current_user: User = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+
+    return db.query(User).all()
+
+# ===================================================
+# SALARY
+# ===================================================
+
+@app.post("/salary")
+def add_salary(salary: SalaryCreate,
+               current_user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+
+    user = db.query(User).filter(
+        User.id == salary.user_id
     ).first()
 
-    if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    return employee.salaries
+    new_salary = Salary(
+        user_id=salary.user_id,
+        amount=salary.amount
+    )
+
+    db.add(new_salary)
+    db.commit()
+    db.refresh(new_salary)
+
+    return {"message": "Salary added successfully"}
+
+# ===================================================
+# GET USER WITH SALARY HISTORY
+# ===================================================
+
+@app.get("/users/{user_id}")
+def get_user_details(user_id: int,
+                     current_user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    salaries = db.query(Salary).filter(
+        Salary.user_id == user_id
+    ).all()
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "department": user.department.name if user.department else None,
+        "salary_history": [
+            {
+                "amount": s.amount,
+                "effective_date": s.effective_date
+            }
+            for s in salaries
+        ]
+    }
