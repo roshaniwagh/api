@@ -123,7 +123,7 @@ class DepartmentResponse(BaseModel):
 class UserCreate(BaseModel):
     username: str
     password: str
-    department_id: int
+    department_id: int | None=None
 
 class UserResponse(BaseModel):
     id: int
@@ -148,13 +148,13 @@ app = FastAPI()
 
 @app.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
+    if user.department_id:
+        dept = db.query(Department).filter(
+            Department.id == user.department_id
+        ).first()
 
-    dept = db.query(Department).filter(
-        Department.id == user.department_id
-    ).first()
-
-    if not dept:
-        raise HTTPException(status_code=400, detail="Department not found")
+        if not dept:
+            raise HTTPException(status_code=400, detail="Department not found")
 
     existing_user = db.query(User).filter(
         User.username == user.username
