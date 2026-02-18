@@ -11,5 +11,5 @@ def add(a: int, b: int):
     return {"result": a + b}
 
 @app.get("/sub")
-def sub(a, b):
+def sub(a: int, b: int):
     return {"result": a-b}
