@@ -128,7 +128,7 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
-    department_id: int
+    department_id: int | None=None
     class Config:
         orm_mode = True
 
