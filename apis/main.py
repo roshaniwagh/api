@@ -292,4 +292,3 @@ def get_user_details(user_id: int,
     }
 #new comment added
 #another new comment
-#another comment
