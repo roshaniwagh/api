@@ -1,0 +1,19 @@
+name: Trigger API Automation
+
+on:
+  push:
+    branches:
+      - master   # change to main if needed
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Automation Repo
+        run: |
+          curl -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.API_TEST_TRIGGER_TOKEN }}" \
+          https://api.github.com/repos/roshaniwagh/api.swagh.in/dispatches \
+          -d '{"event_type":"run-api-tests"}'
